@@ -10,7 +10,7 @@ st.set_page_config(
     page_title="UseIria - Gestão Moda Infantil", page_icon="🎀", layout="wide"
 )
 
-# Estilo Profissional
+# Estilo Profissional de Alto Contraste
 st.markdown(
     """
     <style>
@@ -227,7 +227,56 @@ if menu == "📊 Dashboard":
 
   st.markdown("---")
 
+  # --- GRÁFICO DE VENDAS DIÁRIAS ---
   if not df_vendas.empty:
+    st.subheader("📅 Análise de Vendas por Dia")
+
+    df_vendas["Data"] = df_vendas["data_venda"].str.slice(0, 10)
+    df_diario = (
+        df_vendas.groupby("Data")
+        .agg(
+            {
+                "id": "count",
+                "quantidade": "sum",
+                "valor_total": "sum",
+            }
+        )
+        .reset_index()
+    )
+    df_diario.columns = [
+        "Data",
+        "Qtd Pedidos",
+        "Peças Vendidas",
+        "Faturamento (R$)",
+    ]
+
+    col_g1, col_g2 = st.columns(2)
+    with col_g1:
+      fig_vendas_dia = px.bar(
+          df_diario,
+          x="Data",
+          y="Qtd Pedidos",
+          title="Quantidade de Vendas / Pedidos por Dia",
+          color_discrete_sequence=["#d946ef"],
+          text="Qtd Pedidos",
+      )
+      st.plotly_chart(fig_vendas_dia, use_container_width=True)
+
+    with col_g2:
+      fig_fat_dia = px.line(
+          df_diario,
+          x="Data",
+          y="Faturamento (R$)",
+          title="Faturamento Diário (R$)",
+          markers=True,
+          color_discrete_sequence=["#38bdf8"],
+      )
+      st.plotly_chart(fig_fat_dia, use_container_width=True)
+
+    st.markdown("#### Tabela Consolidada de Vendas Diárias")
+    st.dataframe(df_diario, use_container_width=True)
+
+    st.markdown("---")
     c1, c2 = st.columns(2)
     with c1:
       fig_canal = px.pie(
@@ -251,7 +300,7 @@ if menu == "📊 Dashboard":
       st.plotly_chart(fig_pag, use_container_width=True)
 
 # -------------------------------------------------------------------
-# ABA: CADASTRO DE PRODUTOS
+# ABA: CADASTRO E GESTÃO DE ESTOQUE
 # -------------------------------------------------------------------
 elif menu == "📦 Cadastrar Produto":
   st.header("📦 Cadastro & Gestão de Estoque")
@@ -266,15 +315,31 @@ elif menu == "📦 Cadastrar Produto":
       tamanho = st.selectbox(
           "Tamanho", ["RN", "P", "M", "G", "1", "2", "4", "6", "8", "10", "12"]
       )
+      estoque = st.number_input(
+          "Quantidade de Peças no Estoque/Lote", min_value=1, value=1, step=1
+      )
+
     with col2:
       preco_custo = st.number_input(
           "Preço de Custo Unitário (R$)", min_value=0.0, step=0.5
       )
-      frete_compra = st.number_input(
-          "Frete de Compra / Envio p/ Estoque (R$)", min_value=0.0, step=0.5
+      frete_total_lote = st.number_input(
+          "Frete Total do Lote/Nota (R$)",
+          min_value=0.0,
+          step=1.0,
+          help="Digite o valor total pago no frete do lote. O sistema calcula o valor por peça sozinho!",
       )
       preco_venda = st.number_input("Preço de Venda (R$)", min_value=0.0, step=0.5)
-      estoque = st.number_input("Quantidade em Estoque", min_value=1, step=1)
+
+    frete_unitario = (
+        (frete_total_lote / estoque)
+        if (frete_total_lote > 0 and estoque > 0)
+        else 0.0
+    )
+    st.caption(
+        f"💡 *Cálculo automático: O frete por unidade deste produto será de **R$"
+        f" {frete_unitario:.2f}**.*"
+    )
 
     submetido = st.form_submit_button("Salvar Produto")
     if submetido and nome:
@@ -289,7 +354,7 @@ elif menu == "📦 Cadastrar Produto":
               categoria,
               tamanho,
               preco_custo,
-              frete_compra,
+              frete_unitario,
               preco_venda,
               estoque,
           ),
@@ -343,7 +408,12 @@ elif menu == "📦 Cadastrar Produto":
       st.markdown("<br>", unsafe_allow_html=True)
       if st.button("🗑️ Excluir Produto"):
         cursor = conn.cursor()
-        cursor.execute("DELETE FROM produtos WHERE id = ?", (produto_id_excluir,))
+        cursor.execute(
+            "DELETE FROM vendas WHERE produto_id = ?", (produto_id_excluir,)
+        )
+        cursor.execute(
+            "DELETE FROM produtos WHERE id = ?", (produto_id_excluir,)
+        )
         conn.commit()
         st.success("Produto excluído com sucesso!")
         st.rerun()
@@ -517,16 +587,19 @@ elif menu == "👤 Cadastrar Cliente":
       st.markdown("<br>", unsafe_allow_html=True)
       if st.button("🗑️ Excluir Cliente"):
         cursor = conn.cursor()
+        cursor.execute(
+            "DELETE FROM vendas WHERE cliente_id = ?", (cli_id_excluir,)
+        )
         cursor.execute("DELETE FROM clientes WHERE id = ?", (cli_id_excluir,))
         conn.commit()
         st.success("Cliente removida com sucesso!")
         st.rerun()
 
 # -------------------------------------------------------------------
-# ABA: REGISTRO DE VENDAS
+# ABA: REGISTRO E GESTÃO ANALÍTICA DE VENDAS
 # -------------------------------------------------------------------
 elif menu == "💵 Registrar Venda":
-  st.header("💵 Lançamento de Vendas")
+  st.header("💵 Lançamento de Vendas & Histórico Analítico")
 
   df_produtos = pd.read_sql_query(
       "SELECT id, nome || ' (' || tamanho || ')' AS item, preco_venda, estoque"
@@ -538,7 +611,9 @@ elif menu == "💵 Registrar Venda":
   )
 
   if df_produtos.empty:
-    st.warning("Nenhum produto cadastrado com estoque disponível.")
+    st.warning(
+        "Nenhum produto cadastrado com estoque disponível para realizar vendas."
+    )
   else:
     with st.form("form_venda"):
       cliente_opcoes = (
@@ -622,13 +697,97 @@ elif menu == "💵 Registrar Venda":
           st.success("Venda salva com sucesso!")
           st.rerun()
 
+  # --- HISTÓRICO ANALÍTICO DE CADA VENDA & OPÇÃO DE EXCLUSÃO ---
+  st.markdown("---")
+  st.subheader("📋 Visão Analítica de Vendas Registradas")
+
+  query_vendas_detalhada = """
+        SELECT 
+            v.id AS [ID Venda],
+            v.data_venda AS [Data/Hora],
+            COALESCE(c.nome_mae, 'Cliente Avulso') AS [Cliente],
+            p.nome AS [Produto],
+            p.tamanho AS [Tamanho],
+            v.quantidade AS [Qtd],
+            v.taxa_entrega AS [Frete Cobrado (R$)],
+            v.valor_total AS [Valor Total (R$)],
+            v.forma_pagamento AS [Pagamento],
+            v.canal_venda AS [Canal Venda],
+            v.produto_id
+        FROM vendas v
+        LEFT JOIN clientes c ON v.cliente_id = c.id
+        LEFT JOIN produtos p ON v.produto_id = p.id
+        ORDER BY v.id DESC
+    """
+  df_vendas_analitico = pd.read_sql_query(query_vendas_detalhada, conn)
+
+  if df_vendas_analitico.empty:
+    st.info("Nenhuma venda registrada até ao momento.")
+  else:
+    colunas_exibicao = [
+        "ID Venda",
+        "Data/Hora",
+        "Cliente",
+        "Produto",
+        "Tamanho",
+        "Qtd",
+        "Frete Cobrado (R$)",
+        "Valor Total (R$)",
+        "Pagamento",
+        "Canal Venda",
+    ]
+    st.dataframe(
+        df_vendas_analitico[colunas_exibicao], use_container_width=True
+    )
+
+    # --- EXCLUSÃO DE VENDA REGISTRADA ---
+    st.markdown("### 🗑 Excluir Registro de Venda")
+    opcoes_venda_excluir = {}
+    for _, row in df_vendas_analitico.iterrows():
+      opcoes_venda_excluir[row["ID Venda"]] = (
+          f"Venda #{row['ID Venda']} - {row['Cliente']} - {row['Produto']}"
+          f" ({row['Qtd']}x) - R$ {row['Valor Total (R$)']:.2f}"
+      )
+
+    col_vsel, col_vbtn = st.columns([3, 1])
+    with col_vsel:
+      venda_id_excluir = st.selectbox(
+          "Selecione a venda para remover:",
+          options=list(opcoes_venda_excluir.keys()),
+          format_func=lambda x: opcoes_venda_excluir[x],
+      )
+
+    with col_vbtn:
+      st.markdown("<br>", unsafe_allow_html=True)
+      if st.button("🗑 Excluir Venda"):
+        cursor = conn.cursor()
+
+        info_venda = df_vendas_analitico[
+            df_vendas_analitico["ID Venda"] == venda_id_excluir
+        ].iloc[0]
+        qtd_estorno = info_venda["Qtd"]
+        prod_id_estorno = info_venda["produto_id"]
+
+        cursor.execute(
+            "UPDATE produtos SET estoque = estoque + ? WHERE id = ?",
+            (qtd_estorno, prod_id_estorno),
+        )
+
+        cursor.execute("DELETE FROM vendas WHERE id = ?", (venda_id_excluir,))
+        conn.commit()
+
+        st.success(
+            f"Venda #{venda_id_excluir} excluída e {qtd_estorno} unidade(s)"
+            " devolvida(s) ao estoque!"
+        )
+        st.rerun()
+
 # -------------------------------------------------------------------
-# ABA: DESPESAS OPERACIONAIS (SISTEMA CORRIGIDO E PERSISTENTE)
+# ABA: DESPESAS OPERACIONAIS
 # -------------------------------------------------------------------
 elif menu == "💸 Despesas Operacionais":
   st.header("💸 Registro de Despesas Operacionais")
 
-  # Formulário de lançamento de despesa
   with st.form("form_despesa", clear_on_submit=True):
     col1, col2 = st.columns(2)
     with col1:
@@ -677,14 +836,12 @@ elif menu == "💸 Despesas Operacionais":
   else:
     st.dataframe(df_despesas, use_container_width=True)
 
-    # Opção de exclusão de despesa lançada incorretamente
     st.markdown("### 🗑 Excluir Despesa Lançada")
-    opcoes_desp = {
-        row["id"]: (
-            f"ID {row['id']} - {row['Descrição']} - R$ {row['Valor (R$)']:.2f}"
-        )
-        for _, row in df_despesas.iterrows()
-    }
+    opcoes_desp = {}
+    for _, row in df_despesas.iterrows():
+      opcoes_desp[row["id"]] = (
+          f"ID {row['id']} - {row['Descrição']} - R$ {row['Valor (R$)']:.2f}"
+      )
 
     d_sel, d_btn = st.columns([3, 1])
     with d_sel:
@@ -695,7 +852,7 @@ elif menu == "💸 Despesas Operacionais":
       )
     with d_btn:
       st.markdown("<br>", unsafe_allow_html=True)
-      if st.button("🗑️️ Excluir Despesa"):
+      if st.button("🗑 Excluir Despesa"):
         cursor = conn.cursor()
         cursor.execute("DELETE FROM despesas WHERE id = ?", (desp_id_excluir,))
         conn.commit()
