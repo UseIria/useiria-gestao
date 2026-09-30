@@ -295,7 +295,7 @@ elif menu == "📦 Cadastrar Produto":
           ),
       )
       conn.commit()
-      st.success(f"Produto '{nome}' cadastrado!")
+      st.success(f"Produto '{nome}' cadastrado com sucesso!")
       st.rerun()
 
   st.markdown("---")
@@ -309,7 +309,7 @@ elif menu == "📦 Cadastrar Produto":
     df_repor = df_produtos[df_produtos["estoque"] <= 2]
     if not df_repor.empty:
       st.warning(
-          f"⚠️ **ATENÇÃO:** Você tem **{len(df_repor)} produto(s)** com estoque"
+          f"⚠️ **ATENÇÃO:** Tem **{len(df_repor)} produto(s)** com estoque"
           " baixo (2 unidades ou menos)! Prepare a reposição."
       )
       st.dataframe(
@@ -519,7 +519,7 @@ elif menu == "👤 Cadastrar Cliente":
         cursor = conn.cursor()
         cursor.execute("DELETE FROM clientes WHERE id = ?", (cli_id_excluir,))
         conn.commit()
-        st.success("Cliente removida!")
+        st.success("Cliente removida com sucesso!")
         st.rerun()
 
 # -------------------------------------------------------------------
@@ -623,12 +623,13 @@ elif menu == "💵 Registrar Venda":
           st.rerun()
 
 # -------------------------------------------------------------------
-# ABA: DESPESAS OPERACIONAIS
+# ABA: DESPESAS OPERACIONAIS (SISTEMA CORRIGIDO E PERSISTENTE)
 # -------------------------------------------------------------------
 elif menu == "💸 Despesas Operacionais":
   st.header("💸 Registro de Despesas Operacionais")
 
-  with st.form("form_despesa"):
+  # Formulário de lançamento de despesa
+  with st.form("form_despesa", clear_on_submit=True):
     col1, col2 = st.columns(2)
     with col1:
       descricao = st.text_input(
@@ -643,22 +644,63 @@ elif menu == "💸 Despesas Operacionais":
       data_despesa = st.date_input("Data do Pagamento")
 
     submetido = st.form_submit_button("Lançar Despesa")
-    if submetido and descricao and valor > 0:
-      cursor = conn.cursor()
-      cursor.execute(
-          """
+    if submetido:
+      if not descricao or valor <= 0:
+        st.error(
+            "Por favor, preencha a descrição e insira um valor maior que R$"
+            " 0,00."
+        )
+      else:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
                 INSERT INTO despesas (descricao, categoria, valor, data_despesa)
                 VALUES (?, ?, ?, ?)
             """,
-          (descricao, categoria, valor, str(data_despesa)),
-      )
-      conn.commit()
-      st.success("Despesa registrada!")
-      st.rerun()
+            (descricao, categoria, float(valor), str(data_despesa)),
+        )
+        conn.commit()
+        st.success(f"Despesa '{descricao}' no valor de R$ {valor:.2f} lançada!")
+        st.rerun()
 
-  st.subheader("Despesas Lançadas")
-  df_despesas = pd.read_sql_query("SELECT * FROM despesas", conn)
-  st.dataframe(df_despesas, use_container_width=True)
+  st.markdown("---")
+  st.subheader("📋 Despesas Lançadas")
+
+  df_despesas = pd.read_sql_query(
+      "SELECT id, descricao AS [Descrição], categoria AS [Categoria], valor AS"
+      " [Valor (R$)], data_despesa AS [Data] FROM despesas ORDER BY id DESC",
+      conn,
+  )
+
+  if df_despesas.empty:
+    st.info("Nenhuma despesa operacional lançada até ao momento.")
+  else:
+    st.dataframe(df_despesas, use_container_width=True)
+
+    # Opção de exclusão de despesa lançada incorretamente
+    st.markdown("### 🗑 Excluir Despesa Lançada")
+    opcoes_desp = {
+        row["id"]: (
+            f"ID {row['id']} - {row['Descrição']} - R$ {row['Valor (R$)']:.2f}"
+        )
+        for _, row in df_despesas.iterrows()
+    }
+
+    d_sel, d_btn = st.columns([3, 1])
+    with d_sel:
+      desp_id_excluir = st.selectbox(
+          "Selecione a despesa para remover:",
+          options=list(opcoes_desp.keys()),
+          format_func=lambda x: opcoes_desp[x],
+      )
+    with d_btn:
+      st.markdown("<br>", unsafe_allow_html=True)
+      if st.button("🗑️️ Excluir Despesa"):
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM despesas WHERE id = ?", (desp_id_excluir,))
+        conn.commit()
+        st.success("Despesa excluída com sucesso!")
+        st.rerun()
 
 # -------------------------------------------------------------------
 # ABA: BACKUP E EXPORTAÇÃO PARA EXCEL (.XLSX)
@@ -667,7 +709,7 @@ elif menu == "💾 Backup / Exportar":
   st.header("💾 Exportação de Dados & Backup em Excel")
   st.markdown(
       "Gere uma cópia completa de segurança com todas as abas consolidadas em"
-      " um arquivo de planilha `.xlsx`."
+      " um ficheiro de planilha `.xlsx`."
   )
 
   df_prod = pd.read_sql_query("SELECT * FROM produtos", conn)
@@ -675,7 +717,6 @@ elif menu == "💾 Backup / Exportar":
   df_ven = pd.read_sql_query("SELECT * FROM vendas", conn)
   df_desp = pd.read_sql_query("SELECT * FROM despesas", conn)
 
-  # Gerar arquivo em memória usando BytesIO
   output = io.BytesIO()
   with pd.ExcelWriter(output, engine="openpyxl") as writer:
     df_prod.to_excel(writer, sheet_name="Estoque", index=False)
